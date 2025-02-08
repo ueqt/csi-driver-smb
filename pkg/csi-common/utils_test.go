@@ -98,7 +98,7 @@ func TestLogGRPC(t *testing.T) {
 	buf := new(bytes.Buffer)
 	klog.SetOutput(buf)
 
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) { return nil, nil }
+	handler := func(_ context.Context, _ interface{}) (interface{}, error) { return nil, nil }
 	info := grpc.UnaryServerInfo{
 		FullMethod: "fake",
 	}
@@ -116,7 +116,6 @@ func TestLogGRPC(t *testing.T) {
 					"account_name": "k8s",
 					"account_key":  "testkey",
 				},
-				XXX_sizecache: 100,
 			},
 			`GRPC request: {"secrets":"***stripped***","volume_id":"vol_1"}`,
 		},
@@ -144,33 +143,6 @@ func TestLogGRPC(t *testing.T) {
 			buf.Reset()
 		})
 	}
-}
-
-func TestNewDefaultNodeServer(t *testing.T) {
-	d := NewFakeDriver()
-	resp := NewDefaultNodeServer(d)
-	assert.NotNil(t, resp)
-	assert.Equal(t, resp.Driver.Name, fakeDriverName)
-	assert.Equal(t, resp.Driver.NodeID, fakeNodeID)
-	assert.Equal(t, resp.Driver.Version, vendorVersion)
-}
-
-func TestNewDefaultIdentityServer(t *testing.T) {
-	d := NewFakeDriver()
-	resp := NewDefaultIdentityServer(d)
-	assert.NotNil(t, resp)
-	assert.Equal(t, resp.Driver.Name, fakeDriverName)
-	assert.Equal(t, resp.Driver.NodeID, fakeNodeID)
-	assert.Equal(t, resp.Driver.Version, vendorVersion)
-}
-
-func TestNewDefaultControllerServer(t *testing.T) {
-	d := NewFakeDriver()
-	resp := NewDefaultControllerServer(d)
-	assert.NotNil(t, resp)
-	assert.Equal(t, resp.Driver.Name, fakeDriverName)
-	assert.Equal(t, resp.Driver.NodeID, fakeNodeID)
-	assert.Equal(t, resp.Driver.Version, vendorVersion)
 }
 
 func TestNewVolumeCapabilityAccessMode(t *testing.T) {
@@ -222,11 +194,13 @@ func TestNewControllerServiceCapability(t *testing.T) {
 		{
 			cap: csi.ControllerServiceCapability_RPC_GET_CAPACITY,
 		},
+		{
+			cap: csi.ControllerServiceCapability_RPC_CLONE_VOLUME,
+		},
 	}
 	for _, test := range tests {
 		resp := NewControllerServiceCapability(test.cap)
 		assert.NotNil(t, resp)
-		assert.Equal(t, resp.XXX_sizecache, int32(0))
 	}
 }
 
@@ -250,7 +224,6 @@ func TestNewNodeServiceCapability(t *testing.T) {
 	for _, test := range tests {
 		resp := NewNodeServiceCapability(test.cap)
 		assert.NotNil(t, resp)
-		assert.Equal(t, resp.XXX_sizecache, int32(0))
 	}
 }
 

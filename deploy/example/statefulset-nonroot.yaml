@@ -3,6 +3,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: statefulset-smb-nonroot
+  namespace: default
   labels:
     app: nginx
 spec:
@@ -29,6 +30,7 @@ spec:
           volumeMounts:
             - name: persistent-storage
               mountPath: /mnt/smb
+              readOnly: false
   updateStrategy:
     type: RollingUpdate
   selector:
@@ -37,9 +39,8 @@ spec:
   volumeClaimTemplates:
     - metadata:
         name: persistent-storage
-        annotations:
-          volume.beta.kubernetes.io/storage-class: smb
       spec:
+        storageClassName: smb
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:

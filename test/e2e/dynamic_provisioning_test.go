@@ -22,19 +22,17 @@ import (
 	"github.com/kubernetes-csi/csi-driver-smb/test/e2e/driver"
 	"github.com/kubernetes-csi/csi-driver-smb/test/e2e/testsuites"
 
-	"github.com/onsi/ginkgo"
+	"github.com/onsi/ginkgo/v2"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
 	clientset "k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
-	restclientset "k8s.io/client-go/rest"
 	"k8s.io/kubernetes/test/e2e/framework"
+	admissionapi "k8s.io/pod-security-admission/api"
 )
 
 var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 	f := framework.NewDefaultFramework("smb")
+	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
 
 	var (
 		cs         clientset.Interface
@@ -42,7 +40,7 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 		testDriver driver.PVTestDriver
 	)
 
-	ginkgo.BeforeEach(func() {
+	ginkgo.BeforeEach(func(_ ginkgo.SpecContext) {
 		checkPodsRestart := testCmd{
 			command:  "sh",
 			args:     []string{"test/utils/check_driver_pods_restart.sh"},
@@ -53,29 +51,28 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 
 		cs = f.ClientSet
 		ns = f.Namespace
-
-		var err error
-		_, err = restClient(testsuites.SnapshotAPIGroup, testsuites.APIVersionv1beta1)
-		if err != nil {
-			ginkgo.Fail(fmt.Sprintf("could not get rest clientset: %v", err))
-		}
 	})
 
 	testDriver = driver.InitSMBDriver()
-	ginkgo.It("should create a volume after driver restart [smb.csi.k8s.io]", func() {
+	ginkgo.It("should create a volume after driver restart", func(ctx ginkgo.SpecContext) {
 		ginkgo.Skip("test case is disabled since node logs would be lost after driver restart")
 		pod := testsuites.PodDetails{
 			Cmd: convertToPowershellCommandIfNecessary("echo 'hello world' >> /mnt/test-1/data && while true; do sleep 3600; done"),
 			Volumes: []testsuites.VolumeDetails{
 				{
 					ClaimSize: "10Gi",
+					MountOptions: []string{
+						"dir_mode=0777",
+						"file_mode=0777",
+					},
 					VolumeMount: testsuites.VolumeMountDetails{
 						NameGenerate:      "test-volume-",
 						MountPathGenerate: "/mnt/test-",
 					},
 				},
 			},
-			IsWindows: isWindowsCluster,
+			IsWindows:    isWindowsCluster,
+			WinServerVer: winServerVer,
 		}
 
 		podCheckCmd := []string{"cat", "/mnt/test-1/data"}
@@ -102,10 +99,10 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 				execTestCmd([]testCmd{restartDriver})
 			},
 		}
-		test.Run(cs, ns)
+		test.Run(ctx, cs, ns)
 	})
 
-	ginkgo.It("should create a volume on demand with mount options [smb.csi.k8s.io] [Windows]", func() {
+	ginkgo.It("should create a volume on demand with mount options [Windows]", func(ctx ginkgo.SpecContext) {
 		pods := []testsuites.PodDetails{
 			{
 				Cmd: convertToPowershellCommandIfNecessary("echo 'hello world' > /mnt/test-1/data && grep 'hello world' /mnt/test-1/data"),
@@ -127,7 +124,8 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 						},
 					},
 				},
-				IsWindows: isWindowsCluster,
+				IsWindows:    isWindowsCluster,
+				WinServerVer: winServerVer,
 			},
 		}
 		test := testsuites.DynamicallyProvisionedCmdVolumeTest{
@@ -136,10 +134,10 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 			StorageClassParameters: defaultStorageClassParameters,
 		}
 
-		test.Run(cs, ns)
+		test.Run(ctx, cs, ns)
 	})
 
-	ginkgo.It("should create multiple PV objects, bind to PVCs and attach all to different pods on the same node [smb.csi.k8s.io] [Windows]", func() {
+	ginkgo.It("should create multiple PV objects, bind to PVCs and attach all to different pods on the same node [Windows]", func(ctx ginkgo.SpecContext) {
 		pods := []testsuites.PodDetails{
 			{
 				Cmd: convertToPowershellCommandIfNecessary("while true; do echo $(date -u) >> /mnt/test-1/data; sleep 100; done"),
@@ -152,7 +150,8 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 						},
 					},
 				},
-				IsWindows: isWindowsCluster,
+				IsWindows:    isWindowsCluster,
+				WinServerVer: winServerVer,
 			},
 			{
 				Cmd: convertToPowershellCommandIfNecessary("while true; do echo $(date -u) >> /mnt/test-1/data; sleep 100; done"),
@@ -165,7 +164,8 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 						},
 					},
 				},
-				IsWindows: isWindowsCluster,
+				IsWindows:    isWindowsCluster,
+				WinServerVer: winServerVer,
 			},
 		}
 		test := testsuites.DynamicallyProvisionedCollocatedPodTest{
@@ -174,49 +174,11 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 			ColocatePods:           true,
 			StorageClassParameters: defaultStorageClassParameters,
 		}
-		test.Run(cs, ns)
-	})
-
-	ginkgo.It("[createSubDir] should create multiple PV objects, bind to PVCs and attach all to different pods on the same node [smb.csi.k8s.io] [Windows]", func() {
-		pods := []testsuites.PodDetails{
-			{
-				Cmd: convertToPowershellCommandIfNecessary("while true; do echo $(date -u) >> /mnt/test-1/data; sleep 100; done"),
-				Volumes: []testsuites.VolumeDetails{
-					{
-						ClaimSize: "10Gi",
-						VolumeMount: testsuites.VolumeMountDetails{
-							NameGenerate:      "test-volume-",
-							MountPathGenerate: "/mnt/test-",
-						},
-					},
-				},
-				IsWindows: isWindowsCluster,
-			},
-			{
-				Cmd: convertToPowershellCommandIfNecessary("while true; do echo $(date -u) >> /mnt/test-1/data; sleep 100; done"),
-				Volumes: []testsuites.VolumeDetails{
-					{
-						ClaimSize: "10Gi",
-						VolumeMount: testsuites.VolumeMountDetails{
-							NameGenerate:      "test-volume-",
-							MountPathGenerate: "/mnt/test-",
-						},
-					},
-				},
-				IsWindows: isWindowsCluster,
-			},
-		}
-		test := testsuites.DynamicallyProvisionedCollocatedPodTest{
-			CSIDriver:              testDriver,
-			Pods:                   pods,
-			ColocatePods:           true,
-			StorageClassParameters: defaultStorageClassParameters,
-		}
-		test.Run(cs, ns)
+		test.Run(ctx, cs, ns)
 	})
 
 	// Track issue https://github.com/kubernetes/kubernetes/issues/70505
-	ginkgo.It("should create a volume on demand and mount it as readOnly in a pod [smb.csi.k8s.io]", func() {
+	ginkgo.It("should create a volume on demand and mount it as readOnly in a pod", func(ctx ginkgo.SpecContext) {
 		// Windows volume does not support readOnly
 		skipIfTestingInWindowsCluster()
 		pods := []testsuites.PodDetails{
@@ -232,7 +194,8 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 						},
 					},
 				},
-				IsWindows: isWindowsCluster,
+				IsWindows:    isWindowsCluster,
+				WinServerVer: winServerVer,
 			},
 		}
 		test := testsuites.DynamicallyProvisionedReadOnlyVolumeTest{
@@ -240,22 +203,28 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 			Pods:                   pods,
 			StorageClassParameters: defaultStorageClassParameters,
 		}
-		test.Run(cs, ns)
+		test.Run(ctx, cs, ns)
 	})
 
-	ginkgo.It("should create a deployment object, write and read to it, delete the pod and write and read to it again [smb.csi.k8s.io] [Windows]", func() {
+	ginkgo.It("should create a deployment object, write and read to it, delete the pod and write and read to it again [Windows]", func(ctx ginkgo.SpecContext) {
+		skipIfTestingInWindowsCluster()
 		pod := testsuites.PodDetails{
 			Cmd: convertToPowershellCommandIfNecessary("echo 'hello world' >> /mnt/test-1/data && while true; do sleep 100; done"),
 			Volumes: []testsuites.VolumeDetails{
 				{
 					ClaimSize: "10Gi",
+					MountOptions: []string{
+						"dir_mode=0777",
+						"file_mode=0777",
+					},
 					VolumeMount: testsuites.VolumeMountDetails{
 						NameGenerate:      "test-volume-",
 						MountPathGenerate: "/mnt/test-",
 					},
 				},
 			},
-			IsWindows: isWindowsCluster,
+			IsWindows:    isWindowsCluster,
+			WinServerVer: winServerVer,
 		}
 
 		podCheckCmd := []string{"cat", "/mnt/test-1/data"}
@@ -273,10 +242,51 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 			},
 			StorageClassParameters: defaultStorageClassParameters,
 		}
-		test.Run(cs, ns)
+		test.Run(ctx, cs, ns)
 	})
 
-	ginkgo.It(fmt.Sprintf("should delete PV with reclaimPolicy %q [smb.csi.k8s.io] [Windows]", v1.PersistentVolumeReclaimDelete), func() {
+	// Track issue https://github.com/kubernetes-csi/csi-driver-smb/issues/834
+	ginkgo.It(fmt.Sprintf("should delete PV with reclaimPolicy even if it contains read-only subdir %q", v1.PersistentVolumeReclaimDelete), func(ctx ginkgo.SpecContext) {
+		skipIfTestingInWindowsCluster()
+		reclaimPolicy := v1.PersistentVolumeReclaimDelete
+		pod := testsuites.PodDetails{
+			Cmd: convertToPowershellCommandIfNecessary("echo 'hello world' >> /mnt/test-1/data && while true; do sleep 100; done"),
+			Volumes: []testsuites.VolumeDetails{
+				{
+					ClaimSize: "10Gi",
+					MountOptions: []string{
+						"dir_mode=0777",
+						"file_mode=0777",
+						"noperm",
+					},
+					ReclaimPolicy: &reclaimPolicy,
+					VolumeMount: testsuites.VolumeMountDetails{
+						NameGenerate:      "test-volume-",
+						MountPathGenerate: "/mnt/test-",
+					},
+				},
+			},
+			IsWindows:    isWindowsCluster,
+			WinServerVer: winServerVer,
+		}
+
+		podCheckCmd := []string{"sh", "-c", "mkdir /mnt/test-1/subdir-test;chmod a-w /mnt/test-1/subdir-test;ls -ld /mnt/test-1/subdir-test"}
+		expectedString := "dr-xr-xr-x"
+
+		test := testsuites.DynamicallyProvisionedDeletePodTest{
+			CSIDriver: testDriver,
+			Pod:       pod,
+			PodCheck: &testsuites.PodExecCheck{
+				Cmd:            podCheckCmd,
+				ExpectedString: expectedString,
+			},
+			SkipAfterRestartCheck:  true,
+			StorageClassParameters: defaultStorageClassParameters,
+		}
+		test.Run(ctx, cs, ns)
+	})
+
+	ginkgo.It(fmt.Sprintf("should delete PV with reclaimPolicy %q [Windows]", v1.PersistentVolumeReclaimDelete), func(ctx ginkgo.SpecContext) {
 		reclaimPolicy := v1.PersistentVolumeReclaimDelete
 		volumes := []testsuites.VolumeDetails{
 			{
@@ -289,10 +299,10 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 			Volumes:                volumes,
 			StorageClassParameters: defaultStorageClassParameters,
 		}
-		test.Run(cs, ns)
+		test.Run(ctx, cs, ns)
 	})
 
-	ginkgo.It(fmt.Sprintf("should retain PV with reclaimPolicy %q [smb.csi.k8s.io] [Windows]", v1.PersistentVolumeReclaimRetain), func() {
+	ginkgo.It(fmt.Sprintf("should retain PV with reclaimPolicy %q [Windows]", v1.PersistentVolumeReclaimRetain), func(ctx ginkgo.SpecContext) {
 		reclaimPolicy := v1.PersistentVolumeReclaimRetain
 		volumes := []testsuites.VolumeDetails{
 			{
@@ -306,10 +316,10 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 			Driver:                 smbDriver,
 			StorageClassParameters: defaultStorageClassParameters,
 		}
-		test.Run(cs, ns)
+		test.Run(ctx, cs, ns)
 	})
 
-	ginkgo.It("should create a pod with multiple volumes [smb.csi.k8s.io] [Windows]", func() {
+	ginkgo.It("should create a pod with multiple volumes [Windows]", func(ctx ginkgo.SpecContext) {
 		volumes := []testsuites.VolumeDetails{}
 		for i := 1; i <= 6; i++ {
 			volume := testsuites.VolumeDetails{
@@ -324,20 +334,21 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 
 		pods := []testsuites.PodDetails{
 			{
-				Cmd:       convertToPowershellCommandIfNecessary("echo 'hello world' > /mnt/test-1/data && grep 'hello world' /mnt/test-1/data"),
-				Volumes:   volumes,
-				IsWindows: isWindowsCluster,
+				Cmd:          convertToPowershellCommandIfNecessary("echo 'hello world' > /mnt/test-1/data && grep 'hello world' /mnt/test-1/data"),
+				Volumes:      volumes,
+				IsWindows:    isWindowsCluster,
+				WinServerVer: winServerVer,
 			},
 		}
 		test := testsuites.DynamicallyProvisionedPodWithMultiplePVsTest{
 			CSIDriver:              testDriver,
 			Pods:                   pods,
-			StorageClassParameters: defaultStorageClassParameters,
+			StorageClassParameters: subDirStorageClassParameters,
 		}
-		test.Run(cs, ns)
+		test.Run(ctx, cs, ns)
 	})
 
-	ginkgo.It("should create a pod with volume mount subpath [smb.csi.k8s.io] [Windows]", func() {
+	ginkgo.It("should create a pod with volume mount subpath [Windows]", func(ctx ginkgo.SpecContext) {
 		pods := []testsuites.PodDetails{
 			{
 				Cmd: convertToPowershellCommandIfNecessary("echo 'hello world' > /mnt/test-1/data && grep 'hello world' /mnt/test-1/data"),
@@ -350,26 +361,221 @@ var _ = ginkgo.Describe("Dynamic Provisioning", func() {
 						},
 					},
 				},
-				IsWindows: isWindowsCluster,
+				IsWindows:    isWindowsCluster,
+				WinServerVer: winServerVer,
 			},
 		}
 		test := testsuites.DynamicallyProvisionedVolumeSubpathTester{
 			CSIDriver:              testDriver,
 			Pods:                   pods,
+			StorageClassParameters: noProvisionerSecretStorageClassParameters,
+		}
+		test.Run(ctx, cs, ns)
+	})
+
+	ginkgo.It("should clone a volume from an existing volume", func(ctx ginkgo.SpecContext) {
+		skipIfTestingInWindowsCluster()
+
+		pod := testsuites.PodDetails{
+			Cmd: "echo 'hello world' > /mnt/test-1/data",
+			Volumes: []testsuites.VolumeDetails{
+				{
+					ClaimSize: "10Gi",
+					MountOptions: []string{
+						"dir_mode=0777",
+						"file_mode=0777",
+						"uid=0",
+						"gid=0",
+						"mfsymlinks",
+						"cache=strict",
+						"nosharesock",
+					},
+					VolumeMount: testsuites.VolumeMountDetails{
+						NameGenerate:      "test-volume-",
+						MountPathGenerate: "/mnt/test-",
+					},
+				},
+			},
+		}
+		podWithClonedVolume := testsuites.PodDetails{
+			Cmd: "grep 'hello world' /mnt/test-1/data",
+		}
+		test := testsuites.DynamicallyProvisionedVolumeCloningTest{
+			CSIDriver:              testDriver,
+			Pod:                    pod,
+			PodWithClonedVolume:    podWithClonedVolume,
 			StorageClassParameters: defaultStorageClassParameters,
 		}
-		test.Run(cs, ns)
+		test.Run(ctx, cs, ns)
+	})
+
+	ginkgo.It("should create a volume on demand with retaining subdir on delete", func(ctx ginkgo.SpecContext) {
+		pods := []testsuites.PodDetails{
+			{
+				Cmd: convertToPowershellCommandIfNecessary("echo 'hello world' > /mnt/test-1/data && grep 'hello world' /mnt/test-1/data"),
+				Volumes: []testsuites.VolumeDetails{
+					{
+						ClaimSize: "10Gi",
+						MountOptions: []string{
+							"dir_mode=0777",
+							"file_mode=0777",
+							"uid=0",
+							"gid=0",
+							"mfsymlinks",
+							"cache=strict",
+							"nosharesock",
+						},
+						VolumeMount: testsuites.VolumeMountDetails{
+							NameGenerate:      "test-volume-",
+							MountPathGenerate: "/mnt/test-",
+						},
+					},
+				},
+				IsWindows:    isWindowsCluster,
+				WinServerVer: winServerVer,
+			},
+		}
+		test := testsuites.DynamicallyProvisionedCmdVolumeTest{
+			CSIDriver:              testDriver,
+			Pods:                   pods,
+			StorageClassParameters: retainStorageClassParameters,
+		}
+		test.Run(ctx, cs, ns)
+	})
+
+	ginkgo.It("should create a volume on demand with archive on archive", func(ctx ginkgo.SpecContext) {
+		pods := []testsuites.PodDetails{
+			{
+				Cmd: convertToPowershellCommandIfNecessary("echo 'hello world' > /mnt/test-1/data && grep 'hello world' /mnt/test-1/data"),
+				Volumes: []testsuites.VolumeDetails{
+					{
+						ClaimSize: "10Gi",
+						MountOptions: []string{
+							"dir_mode=0777",
+							"file_mode=0777",
+							"uid=0",
+							"gid=0",
+							"mfsymlinks",
+							"cache=strict",
+							"nosharesock",
+						},
+						VolumeMount: testsuites.VolumeMountDetails{
+							NameGenerate:      "test-volume-",
+							MountPathGenerate: "/mnt/test-",
+						},
+					},
+				},
+				IsWindows:    isWindowsCluster,
+				WinServerVer: winServerVer,
+			},
+		}
+		test := testsuites.DynamicallyProvisionedCmdVolumeTest{
+			CSIDriver:              testDriver,
+			Pods:                   pods,
+			StorageClassParameters: archiveStorageClassParameters,
+		}
+		test.Run(ctx, cs, ns)
+	})
+
+	ginkgo.It("should create a volume on demand with archive on archive subDir", func(ctx ginkgo.SpecContext) {
+		pods := []testsuites.PodDetails{
+			{
+				Cmd: convertToPowershellCommandIfNecessary("echo 'hello world' > /mnt/test-1/data && grep 'hello world' /mnt/test-1/data"),
+				Volumes: []testsuites.VolumeDetails{
+					{
+						ClaimSize: "10Gi",
+						MountOptions: []string{
+							"dir_mode=0777",
+							"file_mode=0777",
+							"uid=0",
+							"gid=0",
+							"mfsymlinks",
+							"cache=strict",
+							"nosharesock",
+						},
+						VolumeMount: testsuites.VolumeMountDetails{
+							NameGenerate:      "test-volume-",
+							MountPathGenerate: "/mnt/test-",
+						},
+					},
+				},
+				IsWindows:    isWindowsCluster,
+				WinServerVer: winServerVer,
+			},
+		}
+		test := testsuites.DynamicallyProvisionedCmdVolumeTest{
+			CSIDriver:              testDriver,
+			Pods:                   pods,
+			StorageClassParameters: archiveSubDirStorageClassParameters,
+		}
+		test.Run(ctx, cs, ns)
+	})
+
+	ginkgo.It("should create a volume on demand and resize it", func(ctx ginkgo.SpecContext) {
+		pods := []testsuites.PodDetails{
+			{
+				Cmd: "echo 'hello world' > /mnt/test-1/data && grep 'hello world' /mnt/test-1/data",
+				Volumes: []testsuites.VolumeDetails{
+					{
+						ClaimSize: "10Gi",
+						VolumeMount: testsuites.VolumeMountDetails{
+							NameGenerate:      "test-volume-",
+							MountPathGenerate: "/mnt/test-",
+						},
+					},
+				},
+			},
+		}
+		test := testsuites.DynamicallyProvisionedResizeVolumeTest{
+			CSIDriver:              testDriver,
+			Pods:                   pods,
+			StorageClassParameters: archiveSubDirStorageClassParameters,
+		}
+		test.Run(ctx, cs, ns)
+	})
+
+	ginkgo.It("should create an CSI inline volume", func(ctx ginkgo.SpecContext) {
+		if winServerVer == "windows-2022" && !isWindowsHostProcessDeployment {
+			ginkgo.Skip("Skip inline volume test on Windows Server 2022")
+		}
+
+		secretName := "smbcreds"
+		ginkgo.By(fmt.Sprintf("creating secret %s in namespace %s", secretName, ns.Name))
+		tsecret := testsuites.CopyTestSecret(ctx, cs, "default", ns, defaultSmbSecretName)
+		tsecret.Create(ctx)
+		defer tsecret.Cleanup(ctx)
+
+		pods := []testsuites.PodDetails{
+			{
+				Cmd: convertToPowershellCommandIfNecessary("echo 'hello world' > /mnt/test-1/data && grep 'hello world' /mnt/test-1/data"),
+				Volumes: []testsuites.VolumeDetails{
+					{
+						ClaimSize: "100Gi",
+						MountOptions: []string{
+							"uid=0",
+							"gid=0",
+							"mfsymlinks",
+							"cache=strict",
+							"nosharesock",
+						},
+						VolumeMount: testsuites.VolumeMountDetails{
+							NameGenerate:      "test-volume-",
+							MountPathGenerate: "/mnt/test-",
+						},
+					},
+				},
+				IsWindows:    isWindowsCluster,
+				WinServerVer: winServerVer,
+			},
+		}
+
+		test := testsuites.DynamicallyProvisionedInlineVolumeTest{
+			CSIDriver:  testDriver,
+			Pods:       pods,
+			Source:     defaultStorageClassParameters["source"],
+			SecretName: defaultSmbSecretName,
+			ReadOnly:   false,
+		}
+		test.Run(ctx, cs, ns)
 	})
 })
-
-func restClient(group string, version string) (restclientset.Interface, error) {
-	config, err := framework.LoadConfig()
-	if err != nil {
-		ginkgo.Fail(fmt.Sprintf("could not load config: %v", err))
-	}
-	gv := schema.GroupVersion{Group: group, Version: version}
-	config.GroupVersion = &gv
-	config.APIPath = "/apis"
-	config.NegotiatedSerializer = serializer.WithoutConversionCodecFactory{CodecFactory: serializer.NewCodecFactory(runtime.NewScheme())}
-	return restclientset.RESTClientFor(config)
-}

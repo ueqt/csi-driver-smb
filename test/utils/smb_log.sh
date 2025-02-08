@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Copyright 2020 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,9 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#!/bin/bash
+cleanup() {
+    echo "hit unexpected error during log print, exit 0"
+    exit 0
+}
 
-set -e
+trap cleanup ERR
 
 NS=kube-system
 CONTAINER=smb
@@ -61,7 +66,11 @@ kubectl get pods -n${NS} -l${LABEL} \
     | awk 'NR>1 {print $1}' \
     | xargs -I {} kubectl logs {} --prefix -c${CONTAINER} -n${NS}
 
+echo "print out service logs ..."
+echo "======================================================================================"
+kubectl get service -A
+
 echo "print out metrics ..."
 echo "======================================================================================"
-ip=`kubectl get svc csi-$DRIVER-controller -n kube-system | awk '{print $4}'`
+ip=`kubectl get svc csi-$DRIVER-controller -n kube-system --no-headers | awk '{print $4}'`
 curl http://$ip:29644/metrics

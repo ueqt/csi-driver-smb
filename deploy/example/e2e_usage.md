@@ -20,15 +20,16 @@ metadata:
   name: smb
 provisioner: smb.csi.k8s.io
 parameters:
-  source: "//smb-server.default.svc.cluster.local/share"
+  source: //smb-server.default.svc.cluster.local/share
   # if csi.storage.k8s.io/provisioner-secret is provided, will create a sub directory
   # with PV name under source
-  csi.storage.k8s.io/provisioner-secret-name: "smbcreds"
-  csi.storage.k8s.io/provisioner-secret-namespace: "default"
-  csi.storage.k8s.io/node-stage-secret-name: "smbcreds"
-  csi.storage.k8s.io/node-stage-secret-namespace: "default"
+  csi.storage.k8s.io/provisioner-secret-name: smbcreds
+  csi.storage.k8s.io/provisioner-secret-namespace: default
+  csi.storage.k8s.io/node-stage-secret-name: smbcreds
+  csi.storage.k8s.io/node-stage-secret-namespace: default
 reclaimPolicy: Delete  # available values: Delete, Retain
 volumeBindingMode: Immediate
+allowVolumeExpansion: true
 mountOptions:
   - dir_mode=0777
   - file_mode=0777
@@ -51,12 +52,15 @@ metadata:
 provisioner: smb.csi.k8s.io
 parameters:
   # On Windows, "*.default.svc.cluster.local" could not be recognized by csi-proxy
-  source: "//smb-server.default.svc.cluster.local/share"
-  csi.storage.k8s.io/provisioner-secret-name: "smbcreds"
-  csi.storage.k8s.io/provisioner-secret-namespace: "default"
-  csi.storage.k8s.io/node-stage-secret-name: "smbcreds"
-  csi.storage.k8s.io/node-stage-secret-namespace: "default"
+  source: //smb-server.default.svc.cluster.local/share
+  # if csi.storage.k8s.io/provisioner-secret is provided, will create a sub directory
+  # with PV name under source
+  csi.storage.k8s.io/provisioner-secret-name: smbcreds
+  csi.storage.k8s.io/provisioner-secret-namespace: default
+  csi.storage.k8s.io/node-stage-secret-name: smbcreds
+  csi.storage.k8s.io/node-stage-secret-namespace: default
 volumeBindingMode: Immediate
+allowVolumeExpansion: true
 mountOptions:
   - dir_mode=0777
   - file_mode=0777
@@ -87,6 +91,8 @@ Filesystem                                    Size  Used Avail Use% Mounted on
 apiVersion: v1
 kind: PersistentVolume
 metadata:
+  annotations:
+    pv.kubernetes.io/provisioned-by: smb.csi.k8s.io
   name: pv-smb
 spec:
   capacity:
@@ -94,16 +100,17 @@ spec:
   accessModes:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
+  storageClassName: smb
   mountOptions:
     - dir_mode=0777
     - file_mode=0777
-    - vers=3.0
   csi:
     driver: smb.csi.k8s.io
-    readOnly: false
-    volumeHandle: unique-volumeid  # make sure it's a unique id in the cluster
+    # volumeHandle format: {smb-server-address}#{sub-dir-name}#{share-name}
+    # make sure this value is unique for every share in the cluster
+    volumeHandle: smb-server.default.svc.cluster.local/share##
     volumeAttributes:
-      source: "//smb-server-address/sharename"
+      source: //smb-server-address/sharename
     nodeStageSecretRef:
       name: smbcreds
       namespace: default

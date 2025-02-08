@@ -5,7 +5,7 @@ metadata:
   name: csi-smb-controller
   namespace: kube-system
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: csi-smb-controller
@@ -14,11 +14,15 @@ spec:
       labels:
         app: csi-smb-controller
     spec:
-      dnsPolicy: ClusterFirstWithHostNet
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet  # available values: Default, ClusterFirstWithHostNet, ClusterFirst
       serviceAccountName: csi-smb-controller-sa
       nodeSelector:
         kubernetes.io/os: linux
       priorityClassName: system-cluster-critical
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       tolerations:
         - key: "node-role.kubernetes.io/master"
           operator: "Exists"
@@ -26,13 +30,23 @@ spec:
         - key: "node-role.kubernetes.io/controlplane"
           operator: "Exists"
           effect: "NoSchedule"
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+        - key: "CriticalAddonsOnly"
+          operator: "Exists"
+          effect: "NoSchedule"
       containers:
         - name: csi-provisioner
-          image: mcr.microsoft.com/oss/kubernetes-csi/csi-provisioner:v2.2.2
+          image: registry.k8s.io/sig-storage/csi-provisioner:v5.2.0
           args:
             - "-v=2"
             - "--csi-address=$(ADDRESS)"
             - "--leader-election"
+            - "--leader-election-namespace=kube-system"
+            - "--feature-gates=HonorPVReclaimPolicy=true"
+            - "--extra-create-metadata=true"
+            - "--retry-interval-max=30m"
           env:
             - name: ADDRESS
               value: /csi/csi.sock
@@ -41,47 +55,77 @@ spec:
               name: socket-dir
           resources:
             limits:
-              cpu: 100m
-              memory: 300Mi
+              cpu: 1
+              memory: 400Mi
             requests:
               cpu: 10m
               memory: 20Mi
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+        - name: csi-resizer
+          image: registry.k8s.io/sig-storage/csi-resizer:v1.13.1
+          args:
+            - "-csi-address=$(ADDRESS)"
+            - "-v=2"
+            - "-leader-election"
+            - "--leader-election-namespace=kube-system"
+            - '-handle-volume-inuse-error=false'
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          resources:
+            limits:
+              memory: 400Mi
+            requests:
+              cpu: 10m
+              memory: 20Mi
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
         - name: liveness-probe
-          image: mcr.microsoft.com/oss/kubernetes-csi/livenessprobe:v2.4.0
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.15.0
           args:
             - --csi-address=/csi/csi.sock
             - --probe-timeout=3s
-            - --health-port=29642
+            - --http-endpoint=localhost:29642
             - --v=2
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
           resources:
             limits:
-              cpu: 100m
+              cpu: 1
               memory: 100Mi
             requests:
               cpu: 10m
               memory: 20Mi
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
         - name: smb
-          image: mcr.microsoft.com/k8s/csi/smb-csi:latest
+          image: gcr.io/k8s-staging-sig-storage/smbplugin:canary
           imagePullPolicy: IfNotPresent
           args:
             - "--v=5"
             - "--endpoint=$(CSI_ENDPOINT)"
             - "--metrics-address=0.0.0.0:29644"
           ports:
-            - containerPort: 29642
-              name: healthz
-              protocol: TCP
             - containerPort: 29644
               name: metrics
               protocol: TCP
           livenessProbe:
             failureThreshold: 5
             httpGet:
+              host: localhost
               path: /healthz
-              port: healthz
+              port: 29642
             initialDelaySeconds: 30
             timeoutSeconds: 10
             periodSeconds: 30
@@ -90,12 +134,14 @@ spec:
               value: unix:///csi/csi.sock
           securityContext:
             privileged: true
+            capabilities:
+              drop:
+                - ALL
           volumeMounts:
             - mountPath: /csi
               name: socket-dir
           resources:
             limits:
-              cpu: 200m
               memory: 200Mi
             requests:
               cpu: 10m

@@ -102,6 +102,23 @@ func IsFailedPreconditionError(err error) bool {
 	return errors.As(err, &failedPreconditionError)
 }
 
+type OperationNotSupported struct {
+	msg string
+}
+
+func (err *OperationNotSupported) Error() string {
+	return err.msg
+}
+
+func NewOperationNotSupportedError(msg string) *OperationNotSupported {
+	return &OperationNotSupported{msg: msg}
+}
+
+func IsOperationNotSupportedError(err error) bool {
+	var operationNotSupportedError *OperationNotSupported
+	return errors.As(err, &operationNotSupportedError)
+}
+
 // TransientOperationFailure indicates operation failed with a transient error
 // and may fix itself when retried.
 type TransientOperationFailure struct {
@@ -148,10 +165,7 @@ func IsOperationFinishedError(err error) bool {
 // on PVC and actual filesystem on disk did not match
 func IsFilesystemMismatchError(err error) bool {
 	mountError := mount.MountError{}
-	if errors.As(err, &mountError) && mountError.Type == mount.FilesystemMismatch {
-		return true
-	}
-	return false
+	return errors.As(err, &mountError) && mountError.Type == mount.FilesystemMismatch
 }
 
 // IsUncertainProgressError checks if given error is of type that indicates

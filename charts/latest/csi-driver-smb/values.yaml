@@ -1,25 +1,34 @@
 image:
-  baseRepo: mcr.microsoft.com
+  baseRepo: registry.k8s.io/sig-storage
   smb:
-    repository: /k8s/csi/smb-csi
-    tag: latest
+    repository: gcr.io/k8s-staging-sig-storage/smbplugin
+    tag: canary
     pullPolicy: IfNotPresent
   csiProvisioner:
-    repository: /oss/kubernetes-csi/csi-provisioner
-    tag: v2.2.2
+    repository: /csi-provisioner
+    tag: v5.2.0
+    pullPolicy: IfNotPresent
+  csiResizer:
+    repository: registry.k8s.io/sig-storage/csi-resizer
+    tag: v1.13.1
     pullPolicy: IfNotPresent
   livenessProbe:
-    repository: /oss/kubernetes-csi/livenessprobe
-    tag: v2.4.0
+    repository: /livenessprobe
+    tag: v2.15.0
     pullPolicy: IfNotPresent
   nodeDriverRegistrar:
-    repository: /oss/kubernetes-csi/csi-node-driver-registrar
-    tag: v2.3.0
+    repository: /csi-node-driver-registrar
+    tag: v2.13.0
+    pullPolicy: IfNotPresent
+  csiproxy:
+    repository: ghcr.io/kubernetes-sigs/sig-windows/csi-proxy
+    tag: v1.1.2
     pullPolicy: IfNotPresent
 
 serviceAccount:
   create: true # When true, service accounts will be created for you. Set to false if you want to use your own.
-  controller: csi-smb-controller-sa # Name of Service Account to be created or used
+  controller: csi-smb-controller-sa
+  node: csi-smb-node-sa
 
 rbac:
   create: true
@@ -28,32 +37,42 @@ rbac:
 driver:
   name: smb.csi.k8s.io
 
+feature:
+  enableGetVolumeStats: true
+  enableInlineVolume: true
+
 controller:
   name: csi-smb-controller
-  replicas: 2
+  replicas: 1
+  dnsPolicy: ClusterFirstWithHostNet  # available values: Default, ClusterFirstWithHostNet, ClusterFirst
   metricsPort: 29644
   livenessProbe:
     healthPort: 29642
   runOnMaster: false
+  runOnControlPlane: false
   logLevel: 5
+  workingMountDir: "/tmp"
   resources:
     csiProvisioner:
       limits:
-        cpu: 100m
-        memory: 300Mi
+        memory: 400Mi
+      requests:
+        cpu: 10m
+        memory: 20Mi
+    csiResizer:
+      limits:
+        memory: 400Mi
       requests:
         cpu: 10m
         memory: 20Mi
     livenessProbe:
       limits:
-        cpu: 100m
         memory: 100Mi
       requests:
         cpu: 10m
         memory: 20Mi
     smb:
       limits:
-        cpu: 200m
         memory: 200Mi
       requests:
         cpu: 10m
@@ -67,54 +86,89 @@ controller:
     - key: "node-role.kubernetes.io/controlplane"
       operator: "Exists"
       effect: "NoSchedule"
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+    - key: "CriticalAddonsOnly"
+      operator: "Exists"
+      effect: "NoSchedule"
 
 node:
   maxUnavailable: 1
-  metricsPort: 29645
   logLevel: 5
   livenessProbe:
     healthPort: 29643
-  resources:
-    livenessProbe:
-      limits:
-        cpu: 100m
-        memory: 100Mi
-      requests:
-        cpu: 10m
-        memory: 20Mi
-    nodeDriverRegistrar:
-      limits:
-        cpu: 100m
-        memory: 100Mi
-      requests:
-        cpu: 10m
-        memory: 20Mi
-    smb:
-      limits:
-        cpu: 400m
-        memory: 200Mi
-      requests:
-        cpu: 10m
-        memory: 20Mi
   affinity: {}
   nodeSelector: {}
 
 linux:
   enabled: true
   dsName: csi-smb-node # daemonset name
+  dnsPolicy: ClusterFirstWithHostNet  # available values: Default, ClusterFirstWithHostNet, ClusterFirst
   kubelet: /var/lib/kubelet
+  krb5CacheDirectory: "" # directory for kerberos credential cache, empty string means default(/var/lib/kubelet/kerberos/)
+  krb5Prefix: "" # prefix for kerberos credential cache, empty string means default(krb5cc_)
   tolerations:
     - operator: "Exists"
+  resources:
+    livenessProbe:
+      limits:
+        memory: 100Mi
+      requests:
+        cpu: 10m
+        memory: 20Mi
+    nodeDriverRegistrar:
+      limits:
+        memory: 100Mi
+      requests:
+        cpu: 10m
+        memory: 20Mi
+    smb:
+      limits:
+        memory: 200Mi
+      requests:
+        cpu: 10m
+        memory: 20Mi
 
 windows:
-  enabled: false
+  enabled: true
+  useHostProcessContainers: true
   dsName: csi-smb-node-win # daemonset name
   kubelet: 'C:\var\lib\kubelet'
+  removeSMBMappingDuringUnmount: true
   tolerations:
     - key: "node.kubernetes.io/os"
       operator: "Exists"
       effect: "NoSchedule"
+  resources:
+    livenessProbe:
+      limits:
+        memory: 150Mi
+      requests:
+        cpu: 10m
+        memory: 40Mi
+    nodeDriverRegistrar:
+      limits:
+        memory: 150Mi
+      requests:
+        cpu: 10m
+        memory: 40Mi
+    smb:
+      limits:
+        memory: 600Mi
+      requests:
+        cpu: 10m
+        memory: 40Mi
+  csiproxy:
+    enabled: false # required if windows.enabled is true and useHostProcessContainers is false, but may be installed manually also
+    dsName: csi-proxy-win # daemonset name
+    tolerations: {}
+    affinity: {}
+    username: "NT AUTHORITY\\SYSTEM"
+    nodeSelector:
+      "kubernetes.io/os": windows
 
+customLabels: {}
 ## Collection of annotations to add to all the pods
 podAnnotations: {}
 ## Collection of labels to add to all the pods
@@ -125,4 +179,4 @@ priorityClassName: system-cluster-critical
 ## Security context give the opportunity to run container as nonroot by setting a securityContext
 ## by example :
 ## securityContext: { runAsUser: 1001 }
-securityContext: {}
+securityContext: { seccompProfile: {type: RuntimeDefault} }

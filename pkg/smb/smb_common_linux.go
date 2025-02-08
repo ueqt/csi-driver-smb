@@ -25,22 +25,11 @@ import (
 	mount "k8s.io/mount-utils"
 )
 
-func Mount(m *mount.SafeFormatAndMount, source, target, fsType string, options, sensitiveMountOptions []string) error {
+func Mount(m *mount.SafeFormatAndMount, source, target, fsType string, options, sensitiveMountOptions []string, _ string) error {
 	return m.MountSensitive(source, target, fsType, options, sensitiveMountOptions)
 }
 
-func Unmount(m *mount.SafeFormatAndMount, target string) error {
-	return m.Unmount(target)
-}
-
-func RemoveStageTarget(m *mount.SafeFormatAndMount, target string) error {
-	return os.Remove(target)
-}
-
-func CleanupSMBMountPoint(m *mount.SafeFormatAndMount, target string, extensiveMountCheck bool) error {
-	// unmount first since if remote SMB directory is not found, linked path cannot be deleted with CleanupMountPoint
-	// https://github.com/kubernetes/kubernetes/issues/97031
-	_ = m.Unmount(target)
+func CleanupSMBMountPoint(m *mount.SafeFormatAndMount, target string, extensiveMountCheck bool, _ string) error {
 	return mount.CleanupMountPoint(target, m, extensiveMountCheck)
 }
 
@@ -48,14 +37,14 @@ func CleanupMountPoint(m *mount.SafeFormatAndMount, target string, extensiveMoun
 	return mount.CleanupMountPoint(target, m, extensiveMountCheck)
 }
 
-func preparePublishPath(path string, m *mount.SafeFormatAndMount) error {
+func preparePublishPath(_ string, _ *mount.SafeFormatAndMount) error {
 	return nil
 }
 
-func prepareStagePath(path string, m *mount.SafeFormatAndMount) error {
+func prepareStagePath(_ string, _ *mount.SafeFormatAndMount) error {
 	return nil
 }
 
-func Mkdir(m *mount.SafeFormatAndMount, name string, perm os.FileMode) error {
+func Mkdir(_ *mount.SafeFormatAndMount, name string, perm os.FileMode) error {
 	return os.Mkdir(name, perm)
 }

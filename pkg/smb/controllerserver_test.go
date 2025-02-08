@@ -35,7 +35,7 @@ import (
 const (
 	testServer    = "test-server/baseDir"
 	testCSIVolume = "test-csi"
-	testVolumeID  = "test-server/baseDir#test-csi"
+	testVolumeID  = "test-server/baseDir#test-csi##"
 )
 
 func TestControllerGetCapabilities(t *testing.T) {
@@ -56,6 +56,14 @@ func TestControllerGetCapabilities(t *testing.T) {
 func TestCreateVolume(t *testing.T) {
 	d := NewFakeDriver()
 
+	blockVolCap := []*csi.VolumeCapability{
+		{
+			AccessType: &csi.VolumeCapability_Block{
+				Block: &csi.VolumeCapability_BlockVolume{},
+			},
+		},
+	}
+
 	// Setup workingMountDir
 	workingMountDir, err := os.Getwd()
 	if err != nil {
@@ -66,7 +74,7 @@ func TestCreateVolume(t *testing.T) {
 	// Setup mounter
 	mounter, err := NewFakeMounter()
 	if err != nil {
-		t.Fatalf(fmt.Sprintf("failed to get fake mounter: %v", err))
+		t.Fatalf("failed to get fake mounter: %v", err)
 	}
 	d.mounter = mounter
 
@@ -76,6 +84,7 @@ func TestCreateVolume(t *testing.T) {
 		name                     string
 		req                      *csi.CreateVolumeRequest
 		resp                     *csi.CreateVolumeResponse
+		skipOnWindows            bool
 		flakyWindowsErrorMessage string
 		expectErr                bool
 	}{
@@ -94,7 +103,7 @@ func TestCreateVolume(t *testing.T) {
 					},
 				},
 				Parameters: map[string]string{
-					paramSource: testServer,
+					sourceField: testServer,
 				},
 				Secrets: map[string]string{
 					usernameField: "test",
@@ -106,10 +115,12 @@ func TestCreateVolume(t *testing.T) {
 				Volume: &csi.Volume{
 					VolumeId: testVolumeID,
 					VolumeContext: map[string]string{
-						paramSource: filepath.Join(testServer, testCSIVolume),
+						sourceField: testServer,
+						subDirField: testCSIVolume,
 					},
 				},
 			},
+			skipOnWindows: true,
 			flakyWindowsErrorMessage: fmt.Sprintf("volume(vol_1##) mount \"test-server\" on %#v failed with "+
 				"smb mapping failed with error: rpc error: code = Unknown desc = NewSmbGlobalMapping failed.",
 				sourceTest),
@@ -128,8 +139,22 @@ func TestCreateVolume(t *testing.T) {
 					},
 				},
 				Parameters: map[string]string{
-					paramSource: testServer,
+					sourceField: testServer,
 				},
+			},
+			expectErr: true,
+		},
+		{
+			name: "Volume capabilities missing",
+			req: &csi.CreateVolumeRequest{
+				VolumeCapabilities: []*csi.VolumeCapability{},
+			},
+			expectErr: true,
+		},
+		{
+			name: "block volume capability not supported",
+			req: &csi.CreateVolumeRequest{
+				VolumeCapabilities: blockVolCap,
 			},
 			expectErr: true,
 		},
@@ -158,6 +183,9 @@ func TestCreateVolume(t *testing.T) {
 	for _, test := range cases {
 		test := test //pin
 		t.Run(test.name, func(t *testing.T) {
+			if test.skipOnWindows && runtime.GOOS == "windows" {
+				return
+			}
 			// Setup
 			_ = os.MkdirAll(filepath.Join(d.workingMountDir, testCSIVolume), os.ModePerm)
 
@@ -171,7 +199,7 @@ func TestCreateVolume(t *testing.T) {
 
 			// separate assertion for flaky error messages
 			if test.flakyWindowsErrorMessage != "" && runtime.GOOS == "windows" {
-				fmt.Println("Skipping checks on Windows ENV")
+				fmt.Println("Skipping checks on Windows ENV") // nolint
 			} else {
 				if !test.expectErr && err != nil {
 					t.Errorf("test %q failed: %v", test.name, err)
@@ -206,7 +234,7 @@ func TestDeleteVolume(t *testing.T) {
 	// Setup mounter
 	mounter, err := NewFakeMounter()
 	if err != nil {
-		t.Fatalf(fmt.Sprintf("failed to get fake mounter: %v", err))
+		t.Fatalf("failed to get fake mounter: %v", err)
 	}
 	d.mounter = mounter
 
@@ -247,7 +275,7 @@ func TestDeleteVolume(t *testing.T) {
 			// Verify
 			if runtime.GOOS == "windows" {
 				// skip checks
-				fmt.Println("Skipping checks on Windows ENV")
+				fmt.Println("Skipping checks on Windows ENV") // nolint
 			} else {
 				if test.expectedErr == nil && err != nil {
 					t.Errorf("test %q failed: %v", test.desc, err)
@@ -268,7 +296,7 @@ func TestDeleteVolume(t *testing.T) {
 
 func TestValidateVolumeCapabilities(t *testing.T) {
 	d := NewFakeDriver()
-	stdVolCap := []*csi.VolumeCapability{
+	mountVolCap := []*csi.VolumeCapability{
 		{
 			AccessType: &csi.VolumeCapability_Mount{
 				Mount: &csi.VolumeCapability_MountVolume{},
@@ -279,35 +307,51 @@ func TestValidateVolumeCapabilities(t *testing.T) {
 		},
 	}
 
+	blockVolCap := []*csi.VolumeCapability{
+		{
+			AccessType: &csi.VolumeCapability_Block{
+				Block: &csi.VolumeCapability_BlockVolume{},
+			},
+		},
+	}
+
 	tests := []struct {
 		desc        string
-		req         csi.ValidateVolumeCapabilitiesRequest
+		req         *csi.ValidateVolumeCapabilitiesRequest
 		expectedErr error
 	}{
 		{
 			desc:        "Volume ID missing",
-			req:         csi.ValidateVolumeCapabilitiesRequest{},
+			req:         &csi.ValidateVolumeCapabilitiesRequest{},
 			expectedErr: status.Error(codes.InvalidArgument, "Volume ID missing in request"),
 		},
 		{
 			desc:        "Volume capabilities missing",
-			req:         csi.ValidateVolumeCapabilitiesRequest{VolumeId: "vol_1"},
-			expectedErr: status.Error(codes.InvalidArgument, "Volume capabilities missing in request"),
+			req:         &csi.ValidateVolumeCapabilitiesRequest{VolumeId: "vol_1"},
+			expectedErr: status.Error(codes.InvalidArgument, "volume capabilities missing in request"),
+		},
+		{
+			desc: "block volume capability not supported",
+			req: &csi.ValidateVolumeCapabilitiesRequest{
+				VolumeId:           "vol_1",
+				VolumeCapabilities: blockVolCap,
+			},
+			expectedErr: status.Error(codes.InvalidArgument, "block volume capability not supported"),
 		},
 		{
 			desc: "Valid request",
-			req: csi.ValidateVolumeCapabilitiesRequest{
+			req: &csi.ValidateVolumeCapabilitiesRequest{
 				VolumeId:           "vol_1#f5713de20cde511e8ba4900#fileshare#diskname#",
-				VolumeCapabilities: stdVolCap,
+				VolumeCapabilities: mountVolCap,
 			},
 			expectedErr: nil,
 		},
 	}
 
 	for _, test := range tests {
-		_, err := d.ValidateVolumeCapabilities(context.Background(), &test.req)
+		_, err := d.ValidateVolumeCapabilities(context.Background(), test.req)
 		if !reflect.DeepEqual(err, test.expectedErr) {
-			t.Errorf("Unexpected error: %v", err)
+			t.Errorf("[test: %s] Unexpected error: %v, expected error: %v", test.desc, err, test.expectedErr)
 		}
 	}
 }
@@ -354,11 +398,54 @@ func TestListVolumes(t *testing.T) {
 
 func TestControllerExpandVolume(t *testing.T) {
 	d := NewFakeDriver()
-	req := csi.ControllerExpandVolumeRequest{}
-	resp, err := d.ControllerExpandVolume(context.Background(), &req)
-	assert.Nil(t, resp)
-	if !reflect.DeepEqual(err, status.Error(codes.Unimplemented, "")) {
-		t.Errorf("Unexpected error: %v", err)
+
+	testCases := []struct {
+		name     string
+		testFunc func(t *testing.T)
+	}{
+		{
+			name: "volume ID missing",
+			testFunc: func(t *testing.T) {
+				req := &csi.ControllerExpandVolumeRequest{}
+				_, err := d.ControllerExpandVolume(context.Background(), req)
+				expectedErr := status.Error(codes.InvalidArgument, "Volume ID missing in request")
+				if !reflect.DeepEqual(err, expectedErr) {
+					t.Errorf("actualErr: (%v), expectedErr: (%v)", err, expectedErr)
+				}
+			},
+		},
+		{
+			name: "Capacity Range missing",
+			testFunc: func(t *testing.T) {
+				req := &csi.ControllerExpandVolumeRequest{
+					VolumeId: "unit-test",
+				}
+				_, err := d.ControllerExpandVolume(context.Background(), req)
+				expectedErr := status.Error(codes.InvalidArgument, "Capacity Range missing in request")
+				if !reflect.DeepEqual(err, expectedErr) {
+					t.Errorf("actualErr: (%v), expectedErr: (%v)", err, expectedErr)
+				}
+			},
+		},
+		{
+			name: "Error = nil",
+			testFunc: func(t *testing.T) {
+				req := &csi.ControllerExpandVolumeRequest{
+					VolumeId: "unit-test",
+					CapacityRange: &csi.CapacityRange{
+						RequiredBytes: 10000,
+					},
+				}
+				_, err := d.ControllerExpandVolume(context.Background(), req)
+				if !reflect.DeepEqual(err, nil) {
+					t.Errorf("actualErr: (%v), expectedErr: (%v)", err, nil)
+				}
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, tc.testFunc)
 	}
 }
 
@@ -403,12 +490,13 @@ func TestListSnapshots(t *testing.T) {
 }
 
 func TestGetSmbVolFromID(t *testing.T) {
-
 	cases := []struct {
 		desc      string
 		volumeID  string
 		source    string
 		subDir    string
+		uuid      string
+		onDelete  string
 		expectErr bool
 	}{
 		{
@@ -419,10 +507,50 @@ func TestGetSmbVolFromID(t *testing.T) {
 			expectErr: false,
 		},
 		{
+			desc:      "correct volume id with //",
+			volumeID:  "//smb-server.default.svc.cluster.local/share#pvc-4729891a-f57e-4982-9c60-e9884af1be2f",
+			source:    "//smb-server.default.svc.cluster.local/share",
+			subDir:    "pvc-4729891a-f57e-4982-9c60-e9884af1be2f",
+			expectErr: false,
+		},
+		{
+			desc:      "correct volume id with empty uuid",
+			volumeID:  "smb-server.default.svc.cluster.local/share#pvc-4729891a-f57e-4982-9c60-e9884af1be2f#",
+			source:    "//smb-server.default.svc.cluster.local/share",
+			subDir:    "pvc-4729891a-f57e-4982-9c60-e9884af1be2f",
+			expectErr: false,
+		},
+		{
 			desc:      "correct volume id with multiple base directories",
 			volumeID:  "smb-server.default.svc.cluster.local/share/dir1/dir2#pvc-4729891a-f57e-4982-9c60-e9884af1be2f",
 			source:    "//smb-server.default.svc.cluster.local/share/dir1/dir2",
 			subDir:    "pvc-4729891a-f57e-4982-9c60-e9884af1be2f",
+			expectErr: false,
+		},
+		{
+			desc:      "existing sub dir",
+			volumeID:  "smb-server.default.svc.cluster.local/share#subdir#pvc-4729891a-f57e-4982-9c60-e9884af1be2f",
+			source:    "//smb-server.default.svc.cluster.local/share",
+			subDir:    "subdir",
+			uuid:      "pvc-4729891a-f57e-4982-9c60-e9884af1be2f",
+			expectErr: false,
+		},
+		{
+			desc:      "valid request nested ondelete retain",
+			volumeID:  "smb-server.default.svc.cluster.local/share#subdir#pvc-4729891a-f57e-4982-9c60-e9884af1be2f#retain",
+			source:    "//smb-server.default.svc.cluster.local/share",
+			subDir:    "subdir",
+			uuid:      "pvc-4729891a-f57e-4982-9c60-e9884af1be2f",
+			onDelete:  "retain",
+			expectErr: false,
+		},
+		{
+			desc:      "valid request nested ondelete archive",
+			volumeID:  "smb-server.default.svc.cluster.local/share#subdir#pvc-4729891a-f57e-4982-9c60-e9884af1be2f#archive",
+			source:    "//smb-server.default.svc.cluster.local/share",
+			subDir:    "subdir",
+			uuid:      "pvc-4729891a-f57e-4982-9c60-e9884af1be2f",
+			onDelete:  "archive",
 			expectErr: false,
 		},
 		{
@@ -439,12 +567,345 @@ func TestGetSmbVolFromID(t *testing.T) {
 			smbVolume, err := getSmbVolFromID(test.volumeID)
 
 			if !test.expectErr {
-				assert.Equal(t, smbVolume.sourceField, test.source)
+				assert.Equal(t, smbVolume.source, test.source)
 				assert.Equal(t, smbVolume.subDir, test.subDir)
+				assert.Equal(t, smbVolume.uuid, test.uuid)
+				assert.Equal(t, smbVolume.onDelete, test.onDelete)
 				assert.Nil(t, err)
 			} else {
 				assert.NotNil(t, err)
 			}
 		})
+	}
+}
+
+func TestGetVolumeIDFromSmbVol(t *testing.T) {
+	cases := []struct {
+		desc   string
+		vol    *smbVolume
+		result string
+	}{
+		{
+			desc: "volume without uuid",
+			vol: &smbVolume{
+				source: "//smb-server.default.svc.cluster.local/share",
+				subDir: "subdir",
+			},
+			result: "smb-server.default.svc.cluster.local/share#subdir##",
+		},
+		{
+			desc: "volume with uuid",
+			vol: &smbVolume{
+				source: "//smb-server.default.svc.cluster.local/share",
+				subDir: "subdir",
+				uuid:   "uuid",
+			},
+			result: "smb-server.default.svc.cluster.local/share#subdir#uuid#",
+		},
+		{
+			desc: "volume without subdir",
+			vol: &smbVolume{
+				source: "//smb-server.default.svc.cluster.local/share",
+			},
+			result: "smb-server.default.svc.cluster.local/share###",
+		},
+		{
+			desc: "volume with nested onDelete retain",
+			vol: &smbVolume{
+				source:   "//smb-server.default.svc.cluster.local/share",
+				subDir:   "subdir",
+				uuid:     "uuid",
+				onDelete: "retain",
+			},
+			result: "smb-server.default.svc.cluster.local/share#subdir#uuid#retain",
+		},
+	}
+
+	for _, test := range cases {
+		volumeID := getVolumeIDFromSmbVol(test.vol)
+		assert.Equal(t, volumeID, test.result)
+	}
+}
+
+func TestGetInternalMountPath(t *testing.T) {
+	cases := []struct {
+		desc            string
+		workingMountDir string
+		vol             *smbVolume
+		result          string
+	}{
+		{
+			desc:            "nil volume",
+			workingMountDir: "/tmp",
+			result:          "",
+		},
+		{
+			desc:            "uuid not empty",
+			workingMountDir: "/tmp",
+			vol: &smbVolume{
+				subDir: "subdir",
+				uuid:   "uuid",
+			},
+			result: filepath.Join("/tmp", "uuid"),
+		},
+		{
+			desc:            "uuid empty",
+			workingMountDir: "/tmp",
+			vol: &smbVolume{
+				subDir: "subdir",
+				uuid:   "",
+			},
+			result: filepath.Join("/tmp", "subdir"),
+		},
+	}
+
+	for _, test := range cases {
+		path := getInternalMountPath(test.workingMountDir, test.vol)
+		assert.Equal(t, path, test.result)
+	}
+}
+
+func TestNewSMBVolume(t *testing.T) {
+	cases := []struct {
+		desc      string
+		name      string
+		size      int64
+		params    map[string]string
+		expectVol *smbVolume
+		expectErr error
+	}{
+		{
+			desc: "subDir is specified",
+			name: "pv-name",
+			size: 100,
+			params: map[string]string{
+				"source": "//smb-server.default.svc.cluster.local/share",
+				"subDir": "subdir",
+			},
+			expectVol: &smbVolume{
+				id:     "smb-server.default.svc.cluster.local/share#subdir#pv-name#",
+				source: "//smb-server.default.svc.cluster.local/share",
+				subDir: "subdir",
+				size:   100,
+				uuid:   "pv-name",
+			},
+		},
+		{
+			desc: "subDir with pv/pvc metadata is specified",
+			name: "pv-name",
+			size: 100,
+			params: map[string]string{
+				"source":        "//smb-server.default.svc.cluster.local/share",
+				"subDir":        fmt.Sprintf("subdir-%s-%s-%s", pvcNameMetadata, pvcNamespaceMetadata, pvNameMetadata),
+				pvcNameKey:      "pvcname",
+				pvcNamespaceKey: "pvcnamespace",
+				pvNameKey:       "pvname",
+			},
+			expectVol: &smbVolume{
+				id:     "smb-server.default.svc.cluster.local/share#subdir-pvcname-pvcnamespace-pvname#pv-name#",
+				source: "//smb-server.default.svc.cluster.local/share",
+				subDir: "subdir-pvcname-pvcnamespace-pvname",
+				size:   100,
+				uuid:   "pv-name",
+			},
+		},
+		{
+			desc: "subDir not specified",
+			name: "pv-name",
+			size: 200,
+			params: map[string]string{
+				"source": "//smb-server.default.svc.cluster.local/share",
+			},
+			expectVol: &smbVolume{
+				id:     "smb-server.default.svc.cluster.local/share#pv-name##",
+				source: "//smb-server.default.svc.cluster.local/share",
+				subDir: "pv-name",
+				size:   200,
+				uuid:   "",
+			},
+		},
+		{
+			desc:      "invalid parameter",
+			params:    map[string]string{"invalid-parameter": "value"},
+			expectVol: nil,
+			expectErr: fmt.Errorf("invalid parameter %s in storage class", "invalid-parameter"),
+		},
+		{
+			desc:      "source value is empty",
+			params:    map[string]string{},
+			expectVol: nil,
+			expectErr: fmt.Errorf("%s is a required parameter", sourceField),
+		},
+	}
+
+	for _, test := range cases {
+		vol, err := newSMBVolume(test.name, test.size, test.params, "")
+		if !reflect.DeepEqual(err, test.expectErr) {
+			t.Errorf("[test: %s] Unexpected error: %v, expected error: %v", test.desc, err, test.expectErr)
+		}
+		if !reflect.DeepEqual(vol, test.expectVol) {
+			t.Errorf("[test: %s] Unexpected vol: %v, expected vol: %v", test.desc, vol, test.expectVol)
+		}
+	}
+}
+
+func TestIsValidVolumeCapabilities(t *testing.T) {
+	mountVolumeCapabilities := []*csi.VolumeCapability{
+		{
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{},
+			},
+		},
+	}
+	blockVolumeCapabilities := []*csi.VolumeCapability{
+		{
+			AccessType: &csi.VolumeCapability_Block{
+				Block: &csi.VolumeCapability_BlockVolume{},
+			},
+		},
+	}
+
+	cases := []struct {
+		desc      string
+		volCaps   []*csi.VolumeCapability
+		expectErr error
+	}{
+		{
+			volCaps:   mountVolumeCapabilities,
+			expectErr: nil,
+		},
+		{
+			volCaps:   blockVolumeCapabilities,
+			expectErr: fmt.Errorf("block volume capability not supported"),
+		},
+		{
+			volCaps:   []*csi.VolumeCapability{},
+			expectErr: fmt.Errorf("volume capabilities missing in request"),
+		},
+	}
+
+	for _, test := range cases {
+		err := isValidVolumeCapabilities(test.volCaps)
+		if !reflect.DeepEqual(err, test.expectErr) {
+			t.Errorf("[test: %s] Unexpected error: %v, expected error: %v", test.desc, err, test.expectErr)
+		}
+	}
+}
+
+func TestCopyFromVolume(t *testing.T) {
+	d := NewFakeDriver()
+
+	// Setup workingMountDir
+	workingMountDir, err := os.Getwd()
+	if err != nil {
+		t.Errorf("failed to get current working directory")
+	}
+	d.workingMountDir = workingMountDir
+
+	// Setup mounter
+	mounter, err := NewFakeMounter()
+	if err != nil {
+		t.Fatalf("failed to get fake mounter: %v", err)
+	}
+	d.mounter = mounter
+
+	cases := []struct {
+		desc      string
+		req       *csi.CreateVolumeRequest
+		dstVol    *smbVolume
+		expectErr error
+	}{
+		{
+			desc: "getInternalVolumePath failed",
+			req: &csi.CreateVolumeRequest{
+				Name: testCSIVolume,
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+						},
+					},
+				},
+				Parameters: map[string]string{
+					sourceField: testServer,
+				},
+				Secrets: map[string]string{
+					usernameField: "test",
+					passwordField: "test",
+					domainField:   "test_doamin",
+				},
+				VolumeContentSource: &csi.VolumeContentSource{
+					Type: &csi.VolumeContentSource_Volume{
+						Volume: &csi.VolumeContentSource_VolumeSource{
+							VolumeId: "unit-test",
+						},
+					},
+				},
+			},
+			dstVol: &smbVolume{
+				id:     "smb-server.default.svc.cluster.local/share#pvc-4729891a-f57e-4982-9c60-e9884af1be2f",
+				source: "//smb-server.default.svc.cluster.local/share",
+				subDir: "pvc-4729891a-f57e-4982-9c60-e9884af1be2f",
+			},
+			expectErr: status.Error(codes.NotFound, "could not split \"unit-test\" into server and subDir"),
+		},
+		{
+			desc: "valid copy",
+			req: &csi.CreateVolumeRequest{
+				Name: testCSIVolume,
+				VolumeCapabilities: []*csi.VolumeCapability{
+					{
+						AccessType: &csi.VolumeCapability_Mount{
+							Mount: &csi.VolumeCapability_MountVolume{},
+						},
+						AccessMode: &csi.VolumeCapability_AccessMode{
+							Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+						},
+					},
+				},
+				Parameters: map[string]string{
+					sourceField: testServer,
+				},
+				Secrets: map[string]string{
+					usernameField: "test",
+					passwordField: "test",
+					domainField:   "test_doamin",
+				},
+				VolumeContentSource: &csi.VolumeContentSource{
+					Type: &csi.VolumeContentSource_Volume{
+						Volume: &csi.VolumeContentSource_VolumeSource{
+							VolumeId: testVolumeID,
+						},
+					},
+				},
+			},
+			dstVol: &smbVolume{
+				id:     "smb-server.default.svc.cluster.local/share#pvc-4729891a-f57e-4982-9c60-e9884af1be2f",
+				source: "//smb-server.default.svc.cluster.local/share",
+				subDir: "pvc-4729891a-f57e-4982-9c60-e9884af1be2f",
+			},
+			expectErr: nil,
+		},
+	}
+
+	for _, test := range cases {
+		if test.desc == "valid copy" && runtime.GOOS == "windows" {
+			t.Skip("Skipping test on Windows")
+		}
+
+		// Setup
+		_ = os.MkdirAll(filepath.Join(d.workingMountDir, testCSIVolume, testCSIVolume), os.ModePerm)
+
+		err := d.copyFromVolume(context.TODO(), test.req, test.dstVol)
+		if runtime.GOOS == "windows" {
+			fmt.Println("Skipping checks on Windows ENV") // nolint
+		} else {
+			if !reflect.DeepEqual(err, test.expectErr) {
+				t.Errorf("[test: %s] Unexpected error: %v, expected error: %v", test.desc, err, test.expectErr)
+			}
+		}
 	}
 }

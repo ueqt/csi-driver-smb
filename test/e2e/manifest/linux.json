@@ -12,9 +12,6 @@
                 "containerRuntime": "containerd",
                 "cloudProviderRateLimitQPS": 6,
                 "cloudProviderRateLimitBucket": 20,
-                "apiServerConfig": {
-                    "--enable-admission-plugins": "NamespaceLifecycle,LimitRanger,ServiceAccount,DefaultStorageClass,ResourceQuota,AlwaysPullImages"
-                },
                 "addons": [
                     {
                         "name": "azuredisk-csi-driver",
